@@ -1,12 +1,21 @@
-#FOR TESTING
 import os
 import cv2
 import pandas as pd
-from ultralytics import YOLO
+import torch
 from deep_sort_realtime.deepsort_tracker import DeepSort
 
-model = YOLO("yolov8s.pt")  
+# Define the path to your custom model
+model_path = r'C:\Users\ASUS\Desktop\Start\crowdhuman_yolov5m.pt'
 
+# Load the model with weights_only=False (only if you trust the source)
+model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, _verbose=False)
+#model = torch.load(model_path, map_location='cpu', weights_only=False)  # Alternative loading
+
+# Set the confidence threshold
+model.conf = 0.5
+model.classes = [0]  # Only person class
+
+# Init tracker
 tracker = DeepSort(max_age=2, n_init=3)
 
 RESULTS = []
@@ -23,32 +32,32 @@ def process_clip_folder(clip_folder_path):
         key=lambda x: int(x.split("_")[-1].replace(".png", ""))
     )
 
-    clip_frames = image_files[:64]  
+    clip_frames = image_files[:64]
 
     for file in clip_frames:
         clip_id, frame_number = parse_filename(file)
         full_path = os.path.join(clip_folder_path, file)
         frame = cv2.imread(full_path)
 
-        frame_resized = cv2.resize(frame, (640, 640))
-        results = model(frame_resized, classes=[0])[0]
-
+        # Inference
+        results = model(frame, size=640)
         detections = []
-        for box in results.boxes:
-            conf = float(box.conf)
-            if conf > 0.5:
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
 
-                # Scale back to 256x256 original image coordinates
-                scale_x = 256 / 640
-                scale_y = 256 / 640
-                x1 *= scale_x
-                y1 *= scale_y
-                x2 *= scale_x
-                y2 *= scale_y
+        for *xyxy, conf, cls in results.xyxy[0]:
+            x1, y1, x2, y2 = map(float, xyxy)
+            conf = float(conf)
 
-                detections.append(([x1, y1, x2 - x1, y2 - y1], conf, 0))  
-                
+            # Scale to original size if needed (assuming 256x256 original)
+            scale_x = 256 / 640
+            scale_y = 256 / 640
+            x1 *= scale_x
+            y1 *= scale_y
+            x2 *= scale_x
+            y2 *= scale_y
+
+            detections.append(([x1, y1, x2 - x1, y2 - y1], conf, 0))  # class 0 = person
+
+        # DeepSORT tracking
         tracks = tracker.update_tracks(detections, frame=frame)
 
         for track in tracks:
@@ -63,22 +72,10 @@ def process_clip_folder(clip_folder_path):
                 int(l), int(t), int(w), int(h)
             ])
 
-            # Optional: Draw for debugging
-            # cv2.rectangle(frame, (int(l), int(t)), (int(r), int(b)), (0, 255, 0), 2)
-            # cv2.putText(frame, f'ID: {track_id}', (int(l), int(t)-10),
-            #             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-        # Optional: Show debug window
-        # cv2.imshow("Tracking", frame)
-        # if cv2.waitKey(1) & 0xFF == ord('q'):
-        #     break
-
-
-
-clip_folder = "test1" #it Should be 64 frames inside folder 
+clip_folder = "test1"
 process_clip_folder(clip_folder)
 
-# Save results
+# Save to CSV
 df = pd.DataFrame(RESULTS, columns=["Clip", "Frame", "Person", "Left", "Top", "Width", "Height"])
 df.to_csv("dataTable.csv", index=False)
 print("Saved clip tracking results.")
